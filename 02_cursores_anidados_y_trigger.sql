@@ -1,0 +1,131 @@
+-- PASO 1: Crear y poblar la tabla RANGO_SUBIDA_COMISION
+
+CREATE TABLE RANGO_SUBIDA_COMISION (
+    ID_RANGOS   NUMBER(5),
+    INICIO      NUMBER(15),
+    FIN         NUMBER(15),
+    PORCENTAJE  NUMBER(15),
+    CONSTRAINT RANGO_SUBIDA_COMISION_PK PRIMARY KEY (ID_RANGOS)
+);
+
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (1, 1,     1200,      15);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (2, 1201,  2300,      20);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (3, 2301,  3500,      25);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (4, 3501,  4500,      30);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (5, 4501,  6500,      35);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (6, 6501,  8900,      40);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (7, 8901,  20000,     45);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (8, 20001, 40000,     50);
+INSERT INTO RANGO_SUBIDA_COMISION VALUES (9, 40001, 400000000, 60);
+
+COMMIT;
+
+-- PASO 2: Crear la tabla INFORME_SUBIDA_COMISION
+
+CREATE TABLE INFORME_SUBIDA_COMISION (
+    MES_ANNIO_INFORME VARCHAR2(6),
+    ID_EMPLEADO       NUMBER,
+    NOMBRE_COMPLETO   VARCHAR2(60),
+    COMISION          NUMBER,
+    SUELDO_ACTUAL     NUMBER,
+    PORCENTAJE_SUB    NUMBER,
+    NUEVA_COMISION    NUMBER
+);
+
+-- PASO 3: REQUERIMIENTO 1 - Bloque anónimo con cursores anidados
+
+SET SERVEROUTPUT ON;
+
+DECLARE
+    -- Cursor 1: agrupa las comisiones de abril por empleado
+    CURSOR c_empleados IS
+        SELECT e.EMPLEADO_ID,
+               e.NOMBRE || ' ' || e.APELLIDO AS NOMBRE_COMPLETO,
+               e.SUELDO,
+               SUM(c.VALOR_COMISION)         AS TOTAL_COMISION
+        FROM   EMPLEADOS e
+        JOIN   COMISIONES c ON c.EMPLEADO_ID = e.EMPLEADO_ID
+        WHERE  TO_CHAR(c.FECHA_COMISION, 'MM') = '04'
+        GROUP BY e.EMPLEADO_ID, e.NOMBRE || ' ' || e.APELLIDO, e.SUELDO;
+
+    -- Cursor 2: recibe la comisión de un empleado y busca su % de aumento
+    CURSOR c_rango(p_comision NUMBER) IS
+        SELECT PORCENTAJE
+        FROM   RANGO_SUBIDA_COMISION
+        WHERE  p_comision BETWEEN INICIO AND FIN;
+
+    v_porcentaje      RANGO_SUBIDA_COMISION.PORCENTAJE%TYPE;
+    v_nueva_comision  NUMBER;
+    v_contador        NUMBER := 0;
+BEGIN
+    FOR emp IN c_empleados LOOP
+
+        -- cursor anidado: se abre por cada empleado del cursor externo
+        OPEN c_rango(emp.TOTAL_COMISION);
+        FETCH c_rango INTO v_porcentaje;
+        CLOSE c_rango;
+
+        v_nueva_comision := ROUND(emp.TOTAL_COMISION + (emp.TOTAL_COMISION * v_porcentaje / 100));
+
+        INSERT INTO INFORME_SUBIDA_COMISION VALUES (
+            '042023',
+            emp.EMPLEADO_ID,
+            emp.NOMBRE_COMPLETO,
+            emp.TOTAL_COMISION,
+            emp.SUELDO,
+            v_porcentaje,
+            v_nueva_comision
+        );
+
+        v_contador := v_contador + 1;
+    END LOOP;
+
+    COMMIT;
+
+    DBMS_OUTPUT.PUT_LINE('Procedimiento PL/SQL terminado correctamente.');
+    DBMS_OUTPUT.PUT_LINE('El total de empleados con comisiones es de ' || v_contador);
+END;
+/
+
+-- Verificación:
+SELECT * FROM INFORME_SUBIDA_COMISION;
+
+-- PASO 4: REQUERIMIENTO 2 - Trigger de horario laboral sobre CLIENTES
+
+CREATE OR REPLACE TRIGGER TRG_CLIENTES_HORARIO
+BEFORE INSERT OR UPDATE OR DELETE ON CLIENTES
+FOR EACH ROW
+DECLARE
+    v_dia  VARCHAR2(3);
+    v_hora NUMBER;
+BEGIN
+    v_dia  := TO_CHAR(SYSDATE, 'DY', 'NLS_DATE_LANGUAGE=SPANISH');
+    v_hora := TO_NUMBER(TO_CHAR(SYSDATE, 'HH24'));
+
+    IF v_dia IN ('SÁB', 'DOM') OR v_hora < 8 OR v_hora >= 18 THEN
+        IF INSERTING THEN
+            RAISE_APPLICATION_ERROR(-20501, 'SE DEBE INSERTAR VALORES SOLO EN LA JORNADA DE TRABAJO');
+        ELSIF UPDATING THEN
+            RAISE_APPLICATION_ERROR(-20503, 'SE DEBE MODIFICAR VALORES SOLO EN LA JORNADA DE TRABAJO');
+        ELSIF DELETING THEN
+            RAISE_APPLICATION_ERROR(-20502, 'SE DEBE ELIMINAR SOLO EN LA JORNADA DE TRABAJO');
+        END IF;
+    END IF;
+END;
+/
+
+-- PASO 5: Pruebas del trigger
+
+-- Prueba de INSERT
+INSERT INTO CLIENTES (CLIENTE_ID, CEDULA_RUC, NOMBRE_CIA, NOMBRE_CONTACTO,
+                       DIRECCION_CLI, FAX, EMAIL, CELULAR, FIJO, ID_COMUNA)
+VALUES (11, '21345678', 'SUPERMERCADO TODOCARO', 'LUIS SEPULVEDA',
+        'VICUÑA MACKENNA', NULL, NULL, NULL, NULL, 2);
+
+-- Prueba de DELETE
+DELETE FROM CLIENTES WHERE CLIENTE_ID = 10;
+
+-- Prueba de UPDATE
+UPDATE CLIENTES SET CELULAR = '099998888' WHERE CLIENTE_ID = 9;
+
+COMMIT;
